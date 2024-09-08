@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASL to Audio Recognition - Portrait</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://code.responsivevoice.org/responsivevoice.js?key=JmJgb9W6"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #e9ecef;
+            height: 100vh;
+        }
+        .container {
+            background-color: white;
+            border-radius: 15px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            width: 100%;
+            max-width: 600px;
+            box-sizing: border-box;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 28px;
+            color: #007bff;
+        }
+        #output_container {
+            position: relative;
+            width: 100%;
+            padding-top: 133.33%;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            background-color: #000;
+        }
+        #webcam, #output_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #webcam {
+            transform: scaleX(-1);
+        }
+        #prediction_overlay {
+            position: absolute;
+            left: 15px;
+            top: 15px;
+            color: #00FF00;
+            font-size: 18px;
+            font-weight: bold;
+            text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+        }
+        #textInput {
+            width: 100%;
+            height: 80px;
+            resize: none;
+            margin-bottom: 20px;
+            border: 2px solid #007bff;
+            border-radius: 8px;
+            padding: 12px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        #voiceSelect {
+            width: calc(100% - 22px);
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #007bff;
+            border-radius: 8px;
+            background-color: #ffffff;
+            color: #007bff;
+        }
+        .button-container {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 15px;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 15px;
+        }
+        button {
+            padding: 12px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            transition: background-color 0.3s, transform 0.3s;
+        }
+        button:hover {
+            transform: scale(1.05);
+        }
+        #audioButton { background-color: #28a745; }
+        #deleteButton { background-color: #dc3545; width: 80px; }
+        #spaceButton { background-color: #6c757d; width: 130px; }
+        #addButton { background-color: #007bff; width: 80px; }
+        #no_hand_overlay {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            font-size: 22px;
+            font-weight: bold;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+      
+    </style>
+</head>
+<body>
+   <div class="container">
+        <div id="output_container">
+            <video id="webcam" autoplay playsinline></video>
+            <canvas id="output_canvas"></canvas>
+            <div id="prediction_overlay"></div>
+            <div id="no_hand_overlay">No hand detected<br>Please show your hand</div>
+            
+        </div>
+        <textarea id="textInput" placeholder="ACCEPTED/ADD TEXT HERE"></textarea>
+        
+        <div class="button-container">
+            <button id="audioButton">Speak</button>
+            <select id="voiceSelect">
+              <option>Loading voices...</option>
+            </select>
+        </div>
+        <div class="button-container">
+            <button id="deleteButton">⌫</button>
+            <button id="spaceButton">Space</button>
+            <button id="addButton">ADD</button>
+        </div>
+    </div>
+
+
+    <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('output_canvas');
+    const ctx = canvas.getContext('2d');
+    const predictionOverlay = document.getElementById('prediction_overlay');
+    const noHandOverlay = document.getElementById('no_hand_overlay');
+    const textInput = document.getElementById('textInput');
+    const audioButton = document.getElementById('audioButton');
+    const deleteButton = document.getElementById('deleteButton');
+    const spaceButton = document.getElementById('spaceButton');
+    const addButton = document.getElementById('addButton');
+
+    let currentPrediction = '';
+    let camera;
+    let lastHandDetectionTime = 0;
+    const noHandThreshold = 1000; // 1 second
+    let lastPredictionTime = 0;
+    const predictionDelay = 2000; // 3 seconds
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
+
+    function updateCanvasSize() {
+        const aspectRatio = 3 / 4; // Portrait mode aspect ratio
+        const containerWidth = video.offsetWidth;
+        const containerHeight = video.offsetHeight;
+        
+        let canvasWidth, canvasHeight;
+        
+        if (containerWidth / containerHeight > aspectRatio) {
+            canvasHeight = containerHeight;
+            canvasWidth = canvasHeight * aspectRatio;
+        } else {
+            canvasWidth = containerWidth;
+            canvasHeight = canvasWidth / aspectRatio;
+        }
+        
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        canvas.style.width = `${canvasWidth}px`;
+        canvas.style.height = `${canvasHeight}px`;
+    }
+
+    function onResults(results) {
+        updateCanvasSize();
+        
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw the mirrored video frame
+        ctx.scale(-1, 1);
+        ctx.translate(-canvas.width, 0);
+        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            lastHandDetectionTime = Date.now();
+            noHandOverlay.style.opacity = '0';
+            for (const landmarks of results.multiHandLandmarks) {
+                // Commented out the hand landmarks drawing code
+                /*
+                drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                drawLandmarks(ctx, landmarks, {color: '#FF0000', lineWidth: 2});
+                */
+                const mirroredLandmarks = landmarks.map(l => ({x: 1 - l.x, y: l.y, z: l.z}));
+                const currentTime = Date.now();
+                
+                // Delay the prediction by 3 seconds
+                if (currentTime - lastPredictionTime > predictionDelay) {
+                    sendLandmarksToServer(mirroredLandmarks);
+                    lastPredictionTime = currentTime;
+                }
+            }
+        } else {
+            if (Date.now() - lastHandDetectionTime > noHandThreshold) {
+                noHandOverlay.style.opacity = '1';
+                predictionOverlay.textContent = '';
+                currentPrediction = '';
+            }
+        }
+        ctx.restore();
+    }
+
+    function startCamera() {
+        camera = new Camera(video, {
+            onFrame: async () => {
+                await hands.send({image: video});
+            },
+            width: 720,
+            height: 960
+        });
+        camera.start();
+
+        video.addEventListener('loadedmetadata', updateCanvasSize);
+        window.addEventListener('resize', updateCanvasSize);
+    }
+
+    startCamera();
+
+    async function sendLandmarksToServer(landmarks) {
+        try {
+            const response = await fetch('/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ landmarks: landmarks.map(l => [l.x, l.y, l.z]) })
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const prediction = await response.json();
+            console.log("Received prediction:", prediction);
+            if (prediction.label && prediction.confidence !== undefined) {
+                currentPrediction = prediction.label;
+                predictionOverlay.textContent = `${prediction.label}`;
+            } else {
+                currentPrediction = '';
+                predictionOverlay.textContent = "Invalid prediction received";
+            }
+        } catch (error) {
+            console.error(`Error sending landmarks: ${error.message}`);
+            predictionOverlay.textContent = `Error: ${error.message}`;
+            currentPrediction = '';
+        }
+    }
+
+    // Initialize ResponsiveVoice
+    if (responsiveVoice) {
+        console.log("ResponsiveVoice is ready");
+        
+        // Populate voice list
+        const voices = responsiveVoice.getVoices();
+        const voiceSelect = document.getElementById('voiceSelect');
+        voiceSelect.innerHTML = '<option value="">Select a voice</option>';
+        
+        voices.forEach((voice) => {
+            const option = document.createElement('option');
+            option.textContent = voice.name;
+            option.value = voice.name;
+            voiceSelect.appendChild(option);
+        });
+    }
+
+    addButton.addEventListener('click', () => {
+        if (currentPrediction) {
+            textInput.value += currentPrediction;
+        }
+    });
+
+    deleteButton.addEventListener('click', () => {
+        const currentText = textInput.value;
+        if (currentText.length > 0) {
+            textInput.value = currentText.slice(0, -1);
+        }
+    });
+
+    audioButton.addEventListener('click', () => {
+        const text = textInput.value;
+        const selectedVoice = voiceSelect.value;
+        
+        if (text && selectedVoice) {
+            responsiveVoice.speak(text, selectedVoice);
+        } else {
+            console.log("Please enter text and select a voice");
+        }
+    });
+
+    spaceButton.addEventListener('click', () => {
+        textInput.value += ' ';
+    });
+
+    textInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Backspace') {
+            event.preventDefault();
+            const currentText = textInput.value;
+            if (currentText.length > 0) {
+                textInput.value = currentText.slice(0, -1);
+            }
+        }
+    });
+
+    // CSS for Prediction Overlay
+    predictionOverlay.style.fontSize = '60px';
+    predictionOverlay.style.fontWeight = 'bold';
+    predictionOverlay.style.color = 'white';
+</script>
+
+
+
+</body>
+</html>
